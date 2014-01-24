@@ -45,7 +45,6 @@ def update(options):
     all = max(alerts.values())
     
     buzzer = p.OFF
-    buzzer_timestamp = 0
     
     if all == 0:
         # 障害無し
@@ -82,9 +81,9 @@ def update(options):
         short = max((alerts["average"],alerts["warning"]))
         long = max((alerts["disaster"],alerts["high"]))
         
-        if buzzer_timestamp < max((short,long)):
+        if last_buzzer < max((short,long)):
             # 新規のアラートあり
-            buzzer_timestamp = max((short,long))
+            last_buzzer = max((short,long))
             if long > short:
                 p.buzzer = p.LONG
             else:
