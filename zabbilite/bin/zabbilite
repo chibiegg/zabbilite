@@ -1,0 +1,149 @@
+# encoding=utf-8
+from optparse import OptionParser, OptionGroup
+from pytlite import Patlite
+from zabbilite.zabbix import Zabbix
+import time
+
+def get_alert_lastchange(zabbix):
+    levels = ['information', 'warning', 'average', 'high', 'disaster']
+    alerts = {
+              'disaster':0,  # 致命的な障害
+              'high':0,  # 重度の障害
+              'average' :0,  # 軽度の障害
+              'warning':0,  # 警告
+              'information':0,  # 情報
+             }
+    for trigger in zabbix.triger_get():
+        priority = int(trigger["priority"])
+        lastchange = int(trigger["lastchange"])
+        if alerts[levels[priority - 1]] < lastchange:
+            alerts[levels[priority - 1]] = lastchange
+
+    return alerts
+
+
+
+
+def update(options):
+    # パトライトへ接続
+    p = Patlite(options.host, options.port, options.proto)
+    p.auto_update = False
+
+    # ブザーを鳴らした最終時刻
+    last_buzzer = 0
+    try:
+        with open("/tmp/patlite_buzzer","r") as f:
+            last_buzzer = int(f.read())
+    except:
+        pass
+
+    # Zabbixへ接続
+    z = Zabbix(options.url)
+    z.login(options.user, options.password)
+    alerts = get_alert_lastchange(z)
+    
+    all = max(alerts.values())
+    
+    buzzer = p.OFF
+    buzzer_timestamp = 0
+    
+    if all == 0:
+        # 障害無し
+        p.red = p.OFF
+        p.yellow = p.OFF
+        p.green = p.ON
+        p.buzzer = p.OFF
+    else:
+        ### LED ###
+        # 情報
+        if alerts["information"]:
+            p.green = p.BLINK
+        else:
+            p.green = p.OFF
+
+        # 軽度の障害/警告
+        if alerts["average"]:
+            p.yellow = p.BLINK
+        elif alerts["warning"]:
+            p.yellow = p.ON
+        else:
+            p.yellow = p.OFF
+
+        # 致命的な障害/重度の障害
+        if alerts["disaster"]:
+            p.red = p.BLINK
+        elif alerts["high"]:
+            p.red = p.ON
+        else:
+            p.red = p.OFF
+    
+        ### ブザー ###
+        
+        short = max((alerts["average"],alerts["warning"]))
+        long = max((alerts["disaster"],alerts["high"]))
+        
+        if buzzer_timestamp < max((short,long)):
+            # 新規のアラートあり
+            buzzer_timestamp = max((short,long))
+            if long > short:
+                p.buzzer = p.LONG
+            else:
+                p.buzzer = p.SHORT
+    
+    # パトライトに送信
+    p.send_status()
+    p.print_status()
+    
+    # 最終ブザー時刻を保存
+    with open("/tmp/patlite_buzzer","w") as f:
+        f.write("%d"%last_buzzer)
+
+
+if __name__ == "__main__":
+    usage = "usage: %prog [options] update"
+    parser = OptionParser(usage=usage)
+
+    """ Zabbixに用いる引数 """
+    request_group = OptionGroup(parser, "ZABBIX Options","")
+    parser.add_option_group(request_group)
+
+    request_group.add_option("-z", "--url", dest="url",
+                      help="zabbix 'api_jsonrpc.php' URL")
+    request_group.add_option("-u", "--user", dest="user", default="admin",
+                      help="Zabbix username")
+    request_group.add_option("-p", "--password", dest="password",
+                      help="Zabbix password")
+    
+    """ Patliteに用いる引数 """
+    response_group = OptionGroup(parser, "Patlite Options","")
+    parser.add_option_group(response_group)
+
+    response_group.add_option("-H", "--host", dest="host",
+                              help="Patlite host",)
+    response_group.add_option("-P", "--port", dest="port", type="int", default=10000,
+                              help="Patlite port",)
+    response_group.add_option("--proto", dest="proto", type="choice", choices=["tcp", "udp"],
+                              default="udp", help="Patlite protocol",)
+
+
+    (options, args) = parser.parse_args()
+
+    if not args:
+        parser.print_help()
+        exit(1)
+
+
+    if not options.url: parser.error('Zabbix URL is required.')
+    if not options.user: parser.error('Zabbix username is required.')
+    if not options.password: parser.error('Zabbix password is required.')
+    if not options.host: parser.error('Patlite host is required.')
+    
+    if args[0] == "update":
+        update(options)
+
+    else:
+        parser.print_help()
+        exit(1)
+
+
+
